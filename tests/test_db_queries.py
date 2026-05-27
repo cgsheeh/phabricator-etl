@@ -14,6 +14,7 @@ from phabricator_etl.stats import (
     diff_phid_to_id,
     get_bug_id,
     get_diff_id_for_changeset,
+    get_revision_projects,
     get_target_repository,
     get_target_repository_uri,
     get_user_email,
@@ -270,4 +271,75 @@ def test_get_bug_id_returns_none_for_empty_field_value(mock_sessions):
         "An empty-string `fieldValue` should normalize to `None` via the "
         "`fieldValue or None` fall-through, so downstream code treats it "
         "the same as a missing bug-id row."
+    )
+
+
+# ---------------------------------------------------------------------------
+# `get_revision_projects`
+# ---------------------------------------------------------------------------
+
+
+def test_get_revision_projects_returns_empty_list_when_no_edges(mock_sessions):
+    revision = SimpleNamespace(phid="PHID-DREV-abc")
+    projects_query = mock_sessions.projects.query(mock_sessions.db.project.Project)
+
+    assert get_revision_projects(revision, mock_sessions, projects_query) == [], (
+        "A revision with no `OBJECT_HAS_PROJECT` edges should produce an "
+        "empty project-tag list."
+    )
+
+
+def test_get_revision_projects_returns_project_slugs(mock_sessions):
+    revision = SimpleNamespace(phid="PHID-DREV-abc")
+    # Register only the edges that pass the (src, type) filter.
+    mock_sessions.diff.set_rows(
+        mock_sessions.db.diff.Edges,
+        [
+            SimpleNamespace(src="PHID-DREV-abc", dst="PHID-PROJ-fenix"),
+            SimpleNamespace(src="PHID-DREV-abc", dst="PHID-PROJ-conduit"),
+        ],
+    )
+    # Register the matching projects in `set` order. The function uses a
+    # set of project PHIDs internally so the output order is not
+    # guaranteed; sort before comparing.
+    mock_sessions.projects.set_rows(
+        mock_sessions.db.project.Project,
+        [
+            SimpleNamespace(phid="PHID-PROJ-fenix", primarySlug="fenix"),
+            SimpleNamespace(phid="PHID-PROJ-conduit", primarySlug="conduit"),
+        ],
+    )
+    projects_query = mock_sessions.projects.query(mock_sessions.db.project.Project)
+
+    result = get_revision_projects(revision, mock_sessions, projects_query)
+
+    assert sorted(result) == ["conduit", "fenix"], (
+        "Two `OBJECT_HAS_PROJECT` edges should resolve to the two "
+        "matching projects' `primarySlug` values."
+    )
+
+
+def test_get_revision_projects_dedups_duplicate_edges(mock_sessions):
+    revision = SimpleNamespace(phid="PHID-DREV-abc")
+    # Two edges pointing at the same project; the function dedups via
+    # `{edge.dst for edge in edges}`.
+    mock_sessions.diff.set_rows(
+        mock_sessions.db.diff.Edges,
+        [
+            SimpleNamespace(src="PHID-DREV-abc", dst="PHID-PROJ-fenix"),
+            SimpleNamespace(src="PHID-DREV-abc", dst="PHID-PROJ-fenix"),
+        ],
+    )
+    mock_sessions.projects.set_rows(
+        mock_sessions.db.project.Project,
+        [SimpleNamespace(phid="PHID-PROJ-fenix", primarySlug="fenix")],
+    )
+    projects_query = mock_sessions.projects.query(mock_sessions.db.project.Project)
+
+    assert get_revision_projects(revision, mock_sessions, projects_query) == [
+        "fenix"
+    ], (
+        "Duplicate edges to the same project should produce the slug "
+        "only once, because the function collects edge `dst` values "
+        "into a set before looking them up."
     )
