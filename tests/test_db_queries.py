@@ -11,6 +11,8 @@ ORM-class placeholders are taken from `mock_sessions.db.<key>.<Class>`.
 from types import SimpleNamespace
 
 from phabricator_etl.stats import (
+    diff_phid_to_id,
+    get_diff_id_for_changeset,
     get_target_repository,
     get_target_repository_uri,
     get_user_email,
@@ -165,4 +167,51 @@ def test_get_target_repository_uri_returns_none_when_no_uri(mock_sessions):
         "When the repository has no `repository_uri` row, "
         "`get_target_repository_uri` should return `None` instead of "
         "dereferencing `.uri` on `None`."
+    )
+
+
+# ---------------------------------------------------------------------------
+# `diff_phid_to_id` and `get_diff_id_for_changeset`
+# ---------------------------------------------------------------------------
+
+
+def test_diff_phid_to_id_returns_none_for_none_input(mock_sessions):
+    assert diff_phid_to_id(None, mock_sessions) is None, (
+        "`diff_phid_to_id(None, ...)` short-circuits to `None` without "
+        "touching the database, because review rows often have null "
+        "last-action/last-comment diff PHIDs."
+    )
+
+
+def test_diff_phid_to_id_returns_diff_id_for_known_phid(mock_sessions):
+    mock_sessions.diff.set_rows(
+        mock_sessions.db.diff.Differential,
+        [SimpleNamespace(phid="PHID-DIFF-xyz", id=4242)],
+    )
+
+    assert diff_phid_to_id("PHID-DIFF-xyz", mock_sessions) == 4242, (
+        "Given a known diff PHID, `diff_phid_to_id` should return the "
+        "numeric `id` of the matching `differential_diff` row."
+    )
+
+
+def test_get_diff_id_for_changeset_returns_none_for_none_input(mock_sessions):
+    assert get_diff_id_for_changeset(None, mock_sessions) is None, (
+        "`get_diff_id_for_changeset(None, ...)` short-circuits to `None`. "
+        "Revision-level comments have `changesetID is None`, so this "
+        "guard is what keeps `get_comments` from looking up a nonexistent "
+        "changeset."
+    )
+
+
+def test_get_diff_id_for_changeset_returns_diff_id_for_known_changeset(mock_sessions):
+    mock_sessions.diff.set_rows(
+        mock_sessions.db.diff.Changeset,
+        [SimpleNamespace(id=77, diffID=88)],
+    )
+
+    assert get_diff_id_for_changeset(77, mock_sessions) == 88, (
+        "Given a known changeset ID, `get_diff_id_for_changeset` should "
+        "return the `diffID` column of the matching "
+        "`differential_changeset` row."
     )
