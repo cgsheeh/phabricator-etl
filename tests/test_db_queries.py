@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 from phabricator_etl.stats import (
     diff_phid_to_id,
+    get_bug_id,
     get_diff_id_for_changeset,
     get_target_repository,
     get_target_repository_uri,
@@ -214,4 +215,59 @@ def test_get_diff_id_for_changeset_returns_diff_id_for_known_changeset(mock_sess
         "Given a known changeset ID, `get_diff_id_for_changeset` should "
         "return the `diffID` column of the matching "
         "`differential_changeset` row."
+    )
+
+
+# ---------------------------------------------------------------------------
+# `get_bug_id`
+# ---------------------------------------------------------------------------
+
+
+def build_bug_id_query(mock_sessions, rows):
+    """Mirror the production setup for `bug_id_query` (with the filter
+    chained on) using the mock session. Tests are responsible for
+    populating the row set so it represents the post-filter result.
+    """
+    custom_field_storage = mock_sessions.db.diff.CustomFieldStorage
+    mock_sessions.diff.set_rows(custom_field_storage, rows)
+    return mock_sessions.diff.query(custom_field_storage).filter(
+        custom_field_storage.fieldIndex == b"zdMFYM6423ua"
+    )
+
+
+def test_get_bug_id_returns_field_value_when_present(mock_sessions):
+    revision = SimpleNamespace(phid="PHID-DREV-abc")
+    bug_id_query = build_bug_id_query(
+        mock_sessions,
+        [SimpleNamespace(objectPHID="PHID-DREV-abc", fieldValue="1234567")],
+    )
+
+    assert get_bug_id(revision, mock_sessions, bug_id_query) == "1234567", (
+        "When a `differential_customfieldstorage` row exists for the "
+        "revision PHID, `get_bug_id` should return its `fieldValue`."
+    )
+
+
+def test_get_bug_id_returns_none_when_no_row(mock_sessions):
+    revision = SimpleNamespace(phid="PHID-DREV-abc")
+    bug_id_query = build_bug_id_query(mock_sessions, [])
+
+    assert get_bug_id(revision, mock_sessions, bug_id_query) is None, (
+        "A revision with no bug-id custom-field row should produce "
+        "`None` rather than raise (revisions without a Bugzilla bug are "
+        "expected)."
+    )
+
+
+def test_get_bug_id_returns_none_for_empty_field_value(mock_sessions):
+    revision = SimpleNamespace(phid="PHID-DREV-abc")
+    bug_id_query = build_bug_id_query(
+        mock_sessions,
+        [SimpleNamespace(objectPHID="PHID-DREV-abc", fieldValue="")],
+    )
+
+    assert get_bug_id(revision, mock_sessions, bug_id_query) is None, (
+        "An empty-string `fieldValue` should normalize to `None` via the "
+        "`fieldValue or None` fall-through, so downstream code treats it "
+        "the same as a missing bug-id row."
     )
